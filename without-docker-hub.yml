@@ -1,0 +1,52 @@
+name: Build & Deploy Docker to EC2
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Build Docker image on GitHub Actions runner
+      - name: Build Docker image
+        run: docker build -t cicd-app:latest .
+
+      # Save image as a tar file
+      - name: Save Docker image to tar
+        run: docker save cicd-app:latest | gzip > cicd-app.tar.gz
+
+      # Copy the tar to EC2 via SCP
+      - name: Copy image to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: cicd-app.tar.gz
+          target: ~/
+
+      # SSH into EC2, load image, and run container
+      - name: Deploy on EC2
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            # Load the Docker image
+            docker load < ~/cicd-app.tar.gz
+
+            # Stop & remove old container if running
+            docker stop cicd-app 2>/dev/null || true
+            docker rm cicd-app 2>/dev/null || true
+
+            # Run new container
+            docker run -d --name cicd-app --restart unless-stopped -p 3000:3000 cicd-app:latest
+
+            # Cleanup tar file
+            rm -f ~/cicd-app.tar.gz
